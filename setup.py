@@ -21,7 +21,6 @@ setup(
     url='https://github.com/schmidtfederico/bqtoolkit',
     packages=find_packages(exclude=['tests']),
     install_requires=dependencies,
-    extras_require={},
     classifiers=[
         'Development Status :: 3 - Alpha',
         'Intended Audience :: Developers',
@@ -36,5 +35,8 @@ setup(
         'Operating System :: OS Independent',
         'Topic :: Internet'
     ],
-    python_requires='>=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*, <4'
+    python_requires='>=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*, <4',
+    extras_require={
+        'testing:python_version == "2.7"': ['mock']
+    }
 )

@@ -1,2 +1,5 @@
 [run]
 source = bqtoolkit
+
+[report]
+show_missing = true
