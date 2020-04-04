@@ -1,5 +1,4 @@
 import re
-
 import sys
 from distutils.util import strtobool
 import six.moves
@@ -9,16 +8,14 @@ from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 from google.cloud.bigquery import Table
 
+from bqtoolkit._helpers import execute_partitions_query
+
 _bq_clients = {}
 
 
 class BQTable(Table):
 
     TABLE_PATH_REGEX = re.compile(r'(?P<project>[\w-]+)[:.](?P<dataset>\w+)\.(?P<name>\w+)')
-
-    PARTITION_PATH_REGEX = re.compile(
-        TABLE_PATH_REGEX.pattern + r'(\$(?P<partition>[\w]+))?'
-    )
 
     def __init__(self, project, dataset, name, schema=None, client=None):
         self.dataset = dataset
@@ -111,6 +108,24 @@ class BQTable(Table):
             fields = self._properties_diff()
         self._update_properties(self.client.update_table(self, fields=fields, **kwargs))
         return self
+
+    def get_partitions(self):
+        self._init_properties()
+
+        from bqtoolkit.partition import BQPartition
+        if self.time_partitioning or self.range_partitioning:
+            partitions = []
+
+            for partition_info in execute_partitions_query(self):
+                partitions.append(BQPartition._from_partition_query(self, partition_info))
+            return partitions
+
+        return None
+
+    def _init_properties(self):
+        # Populate table if was initialized with get() yet.
+        if self.etag is None:
+            self.get(overwrite_changes=False)
 
     def _reset_properties(self):
         self._properties = Table(self.reference, schema=self.schema)._properties

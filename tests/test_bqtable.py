@@ -2,7 +2,7 @@ import pickle
 import unittest
 import os
 
-from datetime import datetime
+from datetime import datetime, date
 
 from google.api_core.exceptions import NotFound
 from google.cloud.bigquery import SchemaField, Table
@@ -18,7 +18,7 @@ import bqtoolkit
 from bqtoolkit.table import BQTable
 
 
-class BQLibTest(unittest.TestCase):
+class BQTableTest(unittest.TestCase):
 
     def setUp(self):
         # Reset library clients before each test.
@@ -43,7 +43,7 @@ class BQLibTest(unittest.TestCase):
             BQTable.from_string('project-id.dataset-id.t')
 
     def test_client_gets_created_if_missing(self):
-        t = BQTable.from_string('bqtoolkit.tmp.table')
+        t = BQTable.from_string('bqtoolkit.test.table')
 
         with mock.patch('google.cloud.bigquery.Client'):
             self.assertIsNotNone(t.client, 'bq_client should be populated when not defined in constructor')
@@ -58,7 +58,7 @@ class BQLibTest(unittest.TestCase):
         self.assertEqual(BQTable.from_string('p.d.t', client=my_client).client, my_client)
 
     def test_client_is_not_part_of_object_state(self):
-        t = BQTable.from_string('bqtoolkit.tmp.table')
+        t = BQTable.from_string('bqtoolkit.test.table')
 
         object_state = t.__getstate__()
 
@@ -67,14 +67,14 @@ class BQLibTest(unittest.TestCase):
     def test_client_is_not_used_for_object_comparison(self):
         my_client = mock.MagicMock()
 
-        table_path = 'bqtoolkit.tmp.table'
+        table_path = 'bqtoolkit.test.table'
 
         with mock.patch('google.cloud.bigquery.Client'):
             if BQTable.from_string(table_path) != BQTable.from_string(table_path, client=my_client):
                 self.fail('Changing the BQTable\'s client changed the output of equality comparison')
 
     def test_is_serializable(self):
-        t = BQTable.from_string('bqtoolkit.tmp.table')
+        t = BQTable.from_string('bqtoolkit.test.table')
 
         try:
             pickle.dumps(t)
@@ -100,16 +100,16 @@ class BQLibTest(unittest.TestCase):
         self.assertEqual(t, restored_t)
 
     def test_full_table_id(self):
-        t = BQTable.from_string('bqtoolkit.tmp.table')
+        t = BQTable.from_string('bqtoolkit.test.table')
 
         self.assertEqual(t.full_table_id, t.get_full_table_id())
-        self.assertEqual(t.get_full_table_id(standard=True), 'bqtoolkit.tmp.table')
-        self.assertEqual(t.get_full_table_id(standard=True, quoted=True), '`bqtoolkit.tmp.table`')
-        self.assertEqual(t.get_full_table_id(quoted=True), '[bqtoolkit:tmp.table]')
+        self.assertEqual(t.get_full_table_id(standard=True), 'bqtoolkit.test.table')
+        self.assertEqual(t.get_full_table_id(standard=True, quoted=True), '`bqtoolkit.test.table`')
+        self.assertEqual(t.get_full_table_id(quoted=True), '[bqtoolkit:test.table]')
 
     @pytest.mark.skipif('GOOGLE_APPLICATION_CREDENTIALS' not in os.environ, reason='Undefined Google credentials')
     def test_table_get(self):
-        t = BQTable.from_string('bqtoolkit.tmp.t')
+        t = BQTable.from_string('bqtoolkit.test.t')
 
         self.assertEqual(t.schema, [])
         self.assertIsNone(t.num_rows)
@@ -123,18 +123,18 @@ class BQLibTest(unittest.TestCase):
 
     @mock.patch('bqtoolkit.table.BQTable.get')
     def test_table_exists(self, mock_table_get):
-        t = BQTable.from_string('bqtoolkit.tmp.t')
+        t = BQTable.from_string('bqtoolkit.test.t')
 
         self.assertTrue(t.exists())
 
         mock_table_get.side_effect = NotFound('')
-        t = BQTable.from_string('bqtoolkit.tmp.nonexistingtable')
+        t = BQTable.from_string('bqtoolkit.test.nonexistingtable')
 
         self.assertFalse(t.exists())
 
     @mock.patch('sys.stdout.write')
     def test_table_deletion_prompt(self, stddout_write_mock):
-        t = BQTable.from_string('bqtoolkit.tmp.nonexistingtable')
+        t = BQTable.from_string('bqtoolkit.test.nonexistingtable')
 
         with mock.patch('google.cloud.bigquery.Client.delete_table') as mock_delete_table:
             t.delete(prompt=False)
@@ -167,7 +167,7 @@ class BQLibTest(unittest.TestCase):
 
     @pytest.mark.skipif('GOOGLE_APPLICATION_CREDENTIALS' not in os.environ, reason='Undefined Google credentials')
     def test_table_creation(self):
-        t = BQTable.from_string('bqtoolkit.tmp.table_name')
+        t = BQTable.from_string('bqtoolkit.test.table_name')
 
         t.delete(prompt=False, not_found_ok=True)
 
@@ -182,7 +182,7 @@ class BQLibTest(unittest.TestCase):
 
     @pytest.mark.skipif('GOOGLE_APPLICATION_CREDENTIALS' not in os.environ, reason='Undefined Google credentials')
     def test_properties_diff(self):
-        t = BQTable.from_string('bqtoolkit.tmp.t')
+        t = BQTable.from_string('bqtoolkit.test.t')
 
         t.get()
 
@@ -208,7 +208,7 @@ class BQLibTest(unittest.TestCase):
         self.assertEqual(t._properties_diff(), ['schema'])
 
     def test_properties_update_policy(self):
-        t = BQTable.from_string('bqtoolkit.tmp.t')
+        t = BQTable.from_string('bqtoolkit.test.t')
 
         with mock.patch('google.cloud.bigquery.Client.get_table') as mock_get_table:
             mock_get_table.return_value = Table.from_api_repr({
@@ -235,3 +235,30 @@ class BQLibTest(unittest.TestCase):
             t.get()
 
             self.assertIsNone(t.friendly_name, 'BQTable.get should override changes to properties')
+
+    @pytest.mark.skipif('GOOGLE_APPLICATION_CREDENTIALS' not in os.environ, reason='Undefined Google credentials')
+    def test_partitions_get(self):
+        t = BQTable.from_string('bqtoolkit.test.date_partitioned')
+
+        with mock.patch('google.cloud.bigquery.Client.get_table') as mock_get_table:
+            mock_get_table.return_value = Table.from_api_repr({
+                'tableReference': t.reference.to_api_repr(),
+                'etag': 'CyDPC2Dt1HUktfmXVZtSpw==',
+                'timePartitioning': {'type': 'DAY', 'field': 'date'}
+            })
+
+            partitions = t.get_partitions()
+
+            self.assertEqual(len(partitions), 4000)
+            self.assertIsInstance(partitions[0].partition_date, date)
+
+    def test_no_partitions_in_unpartitioned_table(self):
+        t = BQTable.from_string('bqtoolkit.test.date_partitioned')
+
+        with mock.patch('google.cloud.bigquery.Client.get_table') as mock_get_table:
+            mock_get_table.return_value = Table.from_api_repr({
+                'tableReference': t.reference.to_api_repr(),
+                'etag': 'CyDPC2Dt1HUktfmXVZtSpw==',
+            })
+
+            self.assertIsNone(t.get_partitions())
