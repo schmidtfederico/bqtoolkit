@@ -139,7 +139,7 @@ class BQLibTest(unittest.TestCase):
             t.delete(prompt=False)
             stddout_write_mock.assert_not_called()
 
-            mock_delete_table.assert_called_once()
+            mock_delete_table.assert_called()
 
             with mock.patch('six.moves.input') as mock_input:
                 mock_input.return_value = 'yes'
@@ -147,8 +147,8 @@ class BQLibTest(unittest.TestCase):
 
                 t.delete()
 
-                mock_delete_table.assert_called_once()
-                stddout_write_mock.assert_called_once()
+                mock_delete_table.assert_called()
+                stddout_write_mock.assert_called()
 
                 mock_input.return_value = ''
                 mock_delete_table.reset_mock()
