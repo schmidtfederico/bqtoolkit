@@ -2,6 +2,10 @@ import pickle
 import unittest
 import os
 
+from datetime import datetime
+from google.api_core.exceptions import NotFound
+from google.cloud.bigquery import SchemaField, Table
+
 try:
     from unittest import mock
 except ImportError:
@@ -16,6 +20,7 @@ from bqtoolkit.table import BQTable
 class BQLibTest(unittest.TestCase):
 
     def setUp(self):
+        # Reset library clients before each test.
         bqtoolkit.table._bq_clients = {}
 
     def test_init_from_path(self):
@@ -108,7 +113,126 @@ class BQLibTest(unittest.TestCase):
         self.assertEqual(t.schema, [])
         self.assertIsNone(t.num_rows)
 
-        t.get()
+        t2 = t.get()
+
+        self.assertEqual(t, t2, 'BQTable.get should return a reference to itself')
 
         self.assertNotEqual(t.schema, [])
         self.assertIsInstance(t.num_rows, int)
+
+    @mock.patch('bqtoolkit.table.BQTable.get')
+    def test_table_exists(self, mock_table_get):
+        t = BQTable.from_string('bqtoolkit.tmp.t')
+
+        self.assertTrue(t.exists())
+
+        mock_table_get.side_effect = NotFound('')
+        t = BQTable.from_string('bqtoolkit.tmp.nonexistingtable')
+
+        self.assertFalse(t.exists())
+
+    @mock.patch('sys.stdout.write')
+    def test_table_deletion_prompt(self, stddout_write_mock):
+        t = BQTable.from_string('bqtoolkit.tmp.nonexistingtable')
+
+        with mock.patch('google.cloud.bigquery.Client.delete_table') as mock_delete_table:
+            t.delete(prompt=False)
+            stddout_write_mock.assert_not_called()
+
+            mock_delete_table.assert_called_once()
+
+            with mock.patch('six.moves.input') as mock_input:
+                mock_input.return_value = 'yes'
+                mock_delete_table.reset_mock()
+
+                t.delete()
+
+                mock_delete_table.assert_called_once()
+                stddout_write_mock.assert_called_once()
+
+                mock_input.return_value = ''
+                mock_delete_table.reset_mock()
+
+                t.delete()
+
+                mock_delete_table.assert_not_called()
+
+                mock_input.return_value = 'no'
+                mock_delete_table.reset_mock()
+
+                t.delete()
+
+                mock_delete_table.assert_not_called()
+
+    @pytest.mark.skipif('GOOGLE_APPLICATION_CREDENTIALS' not in os.environ, reason='Undefined Google credentials')
+    def test_table_creation(self):
+        t = BQTable.from_string('bqtoolkit.tmp.table_name')
+
+        t.delete(prompt=False, not_found_ok=True)
+
+        t.schema = [SchemaField(name='c1', field_type='STRING'), SchemaField(name='c2', field_type='INTEGER')]
+
+        t2 = t.create()
+
+        self.assertEqual(t, t2, 'BQTable.create should return a reference to itself')
+
+        self.assertEqual(len(t.schema), 2)
+        self.assertEqual(t.num_rows, 0)
+
+    @pytest.mark.skipif('GOOGLE_APPLICATION_CREDENTIALS' not in os.environ, reason='Undefined Google credentials')
+    def test_properties_diff(self):
+        t = BQTable.from_string('bqtoolkit.tmp.t')
+
+        t.get()
+
+        t.description = datetime.now().isoformat()
+        t.friendly_name = datetime.now().isoformat()
+
+        diff_fields = t._properties_diff()
+
+        self.assertEqual(len(diff_fields), 2)
+
+        t.update()
+
+        self.assertEqual(len(t._properties_diff()), 0)
+
+        schema = t.schema
+
+        schema[0] = SchemaField(name=schema[0].name,
+                                field_type=schema[0].field_type,
+                                description=datetime.now().isoformat())
+
+        t.schema = schema
+
+        self.assertEqual(t._properties_diff(), ['schema'])
+
+        t.update()
+
+    def test_properties_update_policy(self):
+        t = BQTable.from_string('bqtoolkit.tmp.t')
+
+        with mock.patch('google.cloud.bigquery.Client.get_table') as mock_get_table:
+            mock_get_table.return_value = Table.from_api_repr({
+                'tableReference': t.reference.to_api_repr(),
+                'etag': 'CyDPC2Dt1HUktfmXVZtSpw=='
+            })
+
+            self.assertIsNone(t.etag)
+
+            t.exists()
+
+            self.assertIsNotNone(t.etag, '_properties must be set by BQTable.exists if it etags do not match')
+
+            self.assertIsNone(t.friendly_name)
+
+            t.friendly_name = 'new_friendly_name'
+
+            self.assertEqual(t.friendly_name, 'new_friendly_name')
+
+            t.exists()
+
+            self.assertEqual(t.friendly_name, 'new_friendly_name', 'BQTable.exists should not override changes')
+
+            t.get()
+
+            self.assertIsNone(t.friendly_name, 'BQTable.get should override changes to properties')

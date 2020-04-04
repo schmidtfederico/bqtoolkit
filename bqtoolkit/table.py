@@ -1,5 +1,11 @@
 import re
 
+import sys
+from distutils.util import strtobool
+import six.moves
+import copy
+
+from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 from google.cloud.bigquery import Table
 
@@ -19,6 +25,7 @@ class BQTable(Table):
         self.name = name
 
         self._bq_client = client
+        self._get_properties = {}
 
         super(BQTable, self).__init__('%s.%s.%s' % (project, dataset, name), schema)
 
@@ -72,13 +79,59 @@ class BQTable(Table):
     def full_table_id(self):
         return self.get_full_table_id()
 
-    def get(self):
-        result = self.client.get_table(self)
-        self._properties.update(result._properties)
+    def get(self, overwrite_changes=True, **kwargs):
+        self._update_properties(self.client.get_table(self, **kwargs), force_update=overwrite_changes)
         return self
 
+    def exists(self):
+        try:
+            self.get(overwrite_changes=False)
+            return True
+        except NotFound:
+            return False
+
+    def delete(self, prompt=True, **kwargs):
+        if prompt:
+            sys.stdout.write('Delete table %s? [y/N]' % self.full_table_id)
+            sys.stdout.flush()
+            proceed = six.moves.input().lower().strip()
+            if len(proceed) == 0 or not strtobool(proceed):
+                return False
+        self.client.delete_table(self, **kwargs)
+        # Reset properties.
+        self._reset_properties()
+        return True
+
+    def create(self, **kwargs):
+        self._update_properties(self.client.create_table(self, **kwargs))
+        return self
+
+    def update(self, fields=None, **kwargs):
+        if fields is None:
+            fields = self._properties_diff()
+        self._update_properties(self.client.update_table(self, fields=fields, **kwargs))
+        return self
+
+    def _reset_properties(self):
+        self._properties = Table(self.reference, schema=self.schema)._properties
+        self._get_properties = {}
+
+    def _update_properties(self, api_table, force_update=True):
+        if force_update or self.etag != api_table.etag:
+            self._properties = copy.deepcopy(api_table._properties)
+            self._get_properties = copy.copy(self._properties)
+
+    def _properties_diff(self):
+        changed_properties = []
+        for key, value in self._properties.items():
+            old_value = self._get_properties.get(key, None)
+            if old_value != value:
+                changed_properties.append(key)
+        return changed_properties
+
     def __eq__(self, other):
-        return all([self.__getattribute__(a) == other.__getattribute__(a) for a in ['project', 'name', 'dataset']])
+        return all([self.__getattribute__(a) == other.__getattribute__(a)
+                    for a in ['project', 'name', 'dataset', 'etag']])
 
     def __ne__(self, other):
         return not self == other
@@ -87,8 +140,10 @@ class BQTable(Table):
         # Remove the inner _bq_client when serializing an instance.
         state = self.__dict__.copy()
         del state["_bq_client"]
+        del state["_get_properties"]
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
         self._bq_client = None
+        self._get_properties = {}
