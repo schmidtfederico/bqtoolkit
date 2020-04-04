@@ -3,6 +3,8 @@ import unittest
 import os
 
 from datetime import datetime
+
+import sys
 from google.api_core.exceptions import NotFound
 from google.cloud.bigquery import SchemaField, Table
 
@@ -132,6 +134,7 @@ class BQLibTest(unittest.TestCase):
         self.assertFalse(t.exists())
 
     @mock.patch('sys.stdout.write')
+    @pytest.mark.skipif(sys.version_info == (3, 5), reason="unittest.mock in Python3.5 has missing assertions")
     def test_table_deletion_prompt(self, stddout_write_mock):
         t = BQTable.from_string('bqtoolkit.tmp.nonexistingtable')
 
@@ -205,8 +208,6 @@ class BQLibTest(unittest.TestCase):
         t.schema = schema
 
         self.assertEqual(t._properties_diff(), ['schema'])
-
-        t.update()
 
     def test_properties_update_policy(self):
         t = BQTable.from_string('bqtoolkit.tmp.t')
