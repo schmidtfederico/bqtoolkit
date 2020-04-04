@@ -4,14 +4,13 @@ import os
 
 from datetime import datetime
 
-import sys
 from google.api_core.exceptions import NotFound
 from google.cloud.bigquery import SchemaField, Table
 
 try:
-    from unittest import mock
-except ImportError:
     import mock
+except ImportError:
+    from unittest import mock
 
 import pytest
 
@@ -134,7 +133,6 @@ class BQLibTest(unittest.TestCase):
         self.assertFalse(t.exists())
 
     @mock.patch('sys.stdout.write')
-    @pytest.mark.skipif(sys.version_info == (3, 5), reason="unittest.mock in Python3.5 has missing assertions")
     def test_table_deletion_prompt(self, stddout_write_mock):
         t = BQTable.from_string('bqtoolkit.tmp.nonexistingtable')
 
@@ -142,7 +140,7 @@ class BQLibTest(unittest.TestCase):
             t.delete(prompt=False)
             stddout_write_mock.assert_not_called()
 
-            mock_delete_table.assert_called_once()
+            mock_delete_table.assert_called()
 
             with mock.patch('six.moves.input') as mock_input:
                 mock_input.return_value = 'yes'
@@ -150,8 +148,8 @@ class BQLibTest(unittest.TestCase):
 
                 t.delete()
 
-                mock_delete_table.assert_called_once()
-                stddout_write_mock.assert_called_once()
+                mock_delete_table.assert_called()
+                stddout_write_mock.assert_called()
 
                 mock_input.return_value = ''
                 mock_delete_table.reset_mock()
