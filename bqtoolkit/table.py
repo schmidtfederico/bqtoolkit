@@ -200,7 +200,7 @@ class BQTable(Table):
             # Perform cleanup.
             try:
                 blob.delete()
-            except Forbidden:  # pragma: no cover
+            except Forbidden:
                 warnings.warn('Failed to delete uploaded blob %s' % blob.path)
 
     def _init_properties(self):
