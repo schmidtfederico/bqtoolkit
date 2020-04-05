@@ -8,8 +8,8 @@ python:
 
 install:
   - pip install tox-travis
-  - echo "$GKEY" > pytest@bqtoolkit.json
-  - export GOOGLE_APPLICATION_CREDENTIALS=pytest@bqtoolkit.json
+  - if [ "$TRAVIS_PYTHON_VERSION" = "3.7" ]; then echo "$GKEY" > pytest@bqtoolkit.json; fi
+  - if [ "$TRAVIS_PYTHON_VERSION" = "3.7" ]; then export GOOGLE_APPLICATION_CREDENTIALS=pytest@bqtoolkit.json; fi
   - if [ "$TRAVIS_PYTHON_VERSION" = "3.7" ]; then pip install coveralls -e .; fi
 
 script:

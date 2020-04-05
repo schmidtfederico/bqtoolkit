@@ -1,6 +1,7 @@
 import pickle
 import unittest
 import os
+import sys
 
 from datetime import datetime, date
 
@@ -11,6 +12,12 @@ try:
     import mock
 except ImportError:
     from unittest import mock
+
+try:
+    FileNotFoundError
+except NameError:
+    # Python2.7
+    FileNotFoundError = OSError
 
 import pytest
 
@@ -132,38 +139,40 @@ class BQTableTest(unittest.TestCase):
 
         self.assertFalse(t.exists())
 
+    @mock.patch('google.cloud.bigquery.Client')
     @mock.patch('sys.stdout.write')
-    def test_table_deletion_prompt(self, stddout_write_mock):
+    def test_table_deletion_prompt(self, stddout_write_mock, mock_client):
         t = BQTable.from_string('bqtoolkit.test.nonexistingtable')
 
-        with mock.patch('google.cloud.bigquery.Client.delete_table') as mock_delete_table:
-            t.delete(prompt=False)
-            stddout_write_mock.assert_not_called()
+        mock_delete_table = mock_client.return_value.delete_table
+
+        t.delete(prompt=False)
+        stddout_write_mock.assert_not_called()
+
+        mock_delete_table.assert_called()
+
+        with mock.patch('six.moves.input') as mock_input:
+            mock_input.return_value = 'yes'
+            mock_delete_table.reset_mock()
+
+            t.delete()
 
             mock_delete_table.assert_called()
+            stddout_write_mock.assert_called()
 
-            with mock.patch('six.moves.input') as mock_input:
-                mock_input.return_value = 'yes'
-                mock_delete_table.reset_mock()
+            mock_input.return_value = ''
+            mock_delete_table.reset_mock()
 
-                t.delete()
+            t.delete()
 
-                mock_delete_table.assert_called()
-                stddout_write_mock.assert_called()
+            mock_delete_table.assert_not_called()
 
-                mock_input.return_value = ''
-                mock_delete_table.reset_mock()
+            mock_input.return_value = 'no'
+            mock_delete_table.reset_mock()
 
-                t.delete()
+            t.delete()
 
-                mock_delete_table.assert_not_called()
-
-                mock_input.return_value = 'no'
-                mock_delete_table.reset_mock()
-
-                t.delete()
-
-                mock_delete_table.assert_not_called()
+            mock_delete_table.assert_not_called()
 
     @pytest.mark.skipif('GOOGLE_APPLICATION_CREDENTIALS' not in os.environ, reason='Undefined Google credentials')
     def test_table_creation(self):
@@ -207,34 +216,36 @@ class BQTableTest(unittest.TestCase):
 
         self.assertEqual(t._properties_diff(), ['schema'])
 
-    def test_properties_update_policy(self):
+    @mock.patch('google.cloud.bigquery.Client')
+    def test_properties_update_policy(self, mock_client):
         t = BQTable.from_string('bqtoolkit.test.t')
 
-        with mock.patch('google.cloud.bigquery.Client.get_table') as mock_get_table:
-            mock_get_table.return_value = Table.from_api_repr({
-                'tableReference': t.reference.to_api_repr(),
-                'etag': 'CyDPC2Dt1HUktfmXVZtSpw=='
-            })
+        mock_get_table = mock_client.return_value.get_table
 
-            self.assertIsNone(t.etag)
+        mock_get_table.return_value = Table.from_api_repr({
+            'tableReference': t.reference.to_api_repr(),
+            'etag': 'CyDPC2Dt1HUktfmXVZtSpw=='
+        })
 
-            t.exists()
+        self.assertIsNone(t.etag)
 
-            self.assertIsNotNone(t.etag, '_properties must be set by BQTable.exists if it etags do not match')
+        t.exists()
 
-            self.assertIsNone(t.friendly_name)
+        self.assertIsNotNone(t.etag, '_properties must be set by BQTable.exists if it etags do not match')
 
-            t.friendly_name = 'new_friendly_name'
+        self.assertIsNone(t.friendly_name)
 
-            self.assertEqual(t.friendly_name, 'new_friendly_name')
+        t.friendly_name = 'new_friendly_name'
 
-            t.exists()
+        self.assertEqual(t.friendly_name, 'new_friendly_name')
 
-            self.assertEqual(t.friendly_name, 'new_friendly_name', 'BQTable.exists should not override changes')
+        t.exists()
 
-            t.get()
+        self.assertEqual(t.friendly_name, 'new_friendly_name', 'BQTable.exists should not override changes')
 
-            self.assertIsNone(t.friendly_name, 'BQTable.get should override changes to properties')
+        t.get()
+
+        self.assertIsNone(t.friendly_name, 'BQTable.get should override changes to properties')
 
     @pytest.mark.skipif('GOOGLE_APPLICATION_CREDENTIALS' not in os.environ, reason='Undefined Google credentials')
     def test_partitions_get(self):
@@ -252,13 +263,83 @@ class BQTableTest(unittest.TestCase):
             self.assertEqual(len(partitions), 4000)
             self.assertIsInstance(partitions[0].partition_date, date)
 
-    def test_no_partitions_in_unpartitioned_table(self):
+    @mock.patch('google.cloud.bigquery.Client')
+    def test_no_partitions_in_unpartitioned_table(self, mock_client):
         t = BQTable.from_string('bqtoolkit.test.date_partitioned')
 
-        with mock.patch('google.cloud.bigquery.Client.get_table') as mock_get_table:
-            mock_get_table.return_value = Table.from_api_repr({
-                'tableReference': t.reference.to_api_repr(),
-                'etag': 'CyDPC2Dt1HUktfmXVZtSpw==',
-            })
+        mock_get_table = mock_client.return_value.get_table
 
-            self.assertIsNone(t.get_partitions())
+        mock_get_table.return_value = Table.from_api_repr({
+            'tableReference': t.reference.to_api_repr(),
+            'etag': 'CyDPC2Dt1HUktfmXVZtSpw==',
+        })
+
+        self.assertIsNone(t.get_partitions())
+
+    @mock.patch('google.cloud.storage.Client')
+    @mock.patch('google.cloud.bigquery.Client')
+    def test_load_errors(self, mock_bigquery_client, mock_storage_client):
+        t = BQTable.from_string('bqtoolkit.test.load_table')
+
+        self.assertRaises(FileNotFoundError, t.load, 'non_existing_file.csv')
+
+        builtins = 'builtins' if sys.version_info.major == 3 else '__builtin__'
+
+        with mock.patch('os.stat') as mock_os_stat, mock.patch('%s.open' % builtins):
+            # Less than 10 MB
+            mock_os_stat.return_value = mock.Mock(st_size=1024 * 1024 * 10 - 1)
+
+            mock_load_table_from_file = mock_bigquery_client.return_value.load_table_from_file
+            mock_load_job = mock_load_table_from_file.return_value
+
+            type(mock_load_job).errors = mock.PropertyMock(return_value=[{'error': 'An error'}])
+            mock_load_job.result.side_effect = RuntimeError
+
+            self.assertRaises(RuntimeError, t.load, 'a_file.csv')
+
+            mock_load_table_from_file.assert_called_once()
+
+            # Exactly 10 MB.
+            mock_os_stat.return_value = mock.Mock(st_size=1024 * 1024 * 10)
+
+            # No bucket name provided, file larget than 10 MB.
+            self.assertRaises(ValueError, t.load, 'a_file.csv')
+
+            mock_storage_client.reset_mock()
+
+            mock_load_table_from_uri = mock_bigquery_client.return_value.load_table_from_uri
+            mock_load_job = mock_load_table_from_uri.return_value.result
+
+            mock_load_job.return_value.errors = [{'error': 'an error'}]
+
+            self.assertRaises(RuntimeError, t.load, 'a_file.csv', storage_bucket='my_bucket')
+
+    @pytest.mark.skipif('GOOGLE_APPLICATION_CREDENTIALS' not in os.environ, reason='Undefined Google credentials')
+    def test_load(self):
+        t = BQTable.from_string('bqtoolkit.tmp.%s' % datetime.now().strftime('%M%S%f'))
+
+        t.load('tests/data/upload.csv')
+        t.get()
+
+        self.assertEqual(t.num_rows, 1)
+        self.assertEqual(len(t.schema), 2)
+
+        base_os_stat = os.stat
+
+        with mock.patch('os.stat') as mock_os_stat:
+            # Force upload via GCS.
+            def mock_os_stat_f(path):
+                if path == 'tests/data/upload.csv':
+                    return mock.Mock(st_size=1024 * 1024 * 10, st_mode=33188)
+                else:
+                    return base_os_stat(path)
+
+            mock_os_stat.side_effect = mock_os_stat_f
+
+            t.load('tests/data/upload.csv', storage_bucket='bqtoolkit-test')
+
+            t.get()
+
+            self.assertEqual(t.num_rows, 2)
+
+        t.delete(prompt=False)

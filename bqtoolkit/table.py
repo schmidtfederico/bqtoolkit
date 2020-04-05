@@ -1,12 +1,17 @@
+import json
+import os
 import re
 import sys
+import warnings
 from distutils.util import strtobool
 import six.moves
 import copy
 
+from datetime import datetime
 from google.api_core.exceptions import NotFound
-from google.cloud import bigquery
-from google.cloud.bigquery import Table
+from google.cloud import bigquery, storage
+from google.cloud.bigquery import Table, LoadJobConfig
+from google.cloud.exceptions import Forbidden
 
 from bqtoolkit._helpers import execute_partitions_query
 
@@ -121,6 +126,82 @@ class BQTable(Table):
             return partitions
 
         return None
+
+    def load(self, file_path, storage_project=None, storage_bucket=None, write_disposition='WRITE_APPEND',
+             autodetect=True, **kwargs):
+        """
+        Loads into this table the content of the given file path. Automatically handles large files uploads (> 10 MB)
+        using Google Cloud Storage, if a storage_bucket is provided.
+
+        :param str file_path: Path to the file.
+        :param str storage_project: The GCS project to use to upload the file if it exceeds 10 MB in size.
+                                    Defaults to the table's project.
+        :param str storage_bucket: The GCS bucket to use to upload the file if it exceeds 10 MB in size.
+                                   If not provided and file is larger than 10 MB, a ValueError will be raised.
+        :param bool autodetect: Whether to let BigQuery automatically detect the schema of the file, defaults to True.
+                                 See :class:`~google.cloud.bigquery.LoadJobConfig` for more details.
+        :param bool write_disposition: What to do if table already exists. Defaults to append to it.
+                                  See :class:`~google.cloud.bigquery.LoadJobConfig` for more details.
+        :param kwargs: Other parameters passed to :class:`~google.cloud.bigquery.LoadJobConfig` constructor.
+        :return:
+        """
+        # Create a load job configuration.
+        job_config = LoadJobConfig(**kwargs)
+        job_config.write_disposition = write_disposition
+        job_config.autodetect = autodetect
+
+        file_size_mb = os.stat(file_path).st_size / (1024. * 1024)
+
+        if file_size_mb < 10:
+            # Small files can be loaded directly from the Python API.
+            with open(file_path, 'rb') as load_file:
+                load_job = self.client.load_table_from_file(load_file, self.reference, job_config=job_config)
+
+                try:
+                    load_job.result()
+                except Exception:
+                    raise RuntimeError(
+                        'Failed to load data into table. Errors:\n%s' % json.dumps(load_job.errors, indent=4)
+                    )
+        else:
+            # We need to use Google Cloud Storage and append to the table from a GCS URI.
+
+            # Default to the table project if the storage project is not defined.
+            storage_project = storage_project if storage_project is not None else self.project
+
+            storage_client = storage.Client(project=storage_project)
+
+            if storage_bucket is None:
+                raise ValueError(
+                    "A Google Cloud Storage bucket name should be provided in order to load results to "
+                    "table %s" % self.full_table_id
+                )
+
+            storage_bucket = storage_client.bucket(storage_bucket)
+
+            blob_name = '_tmp_load_%s_%s' % (
+                datetime.now().strftime('%Y-%m-%d_%H_%M_%S.%f'),
+                file_path.replace('/', '_').replace('\\', '_')
+            )
+
+            blob = storage_bucket.blob(blob_name)
+
+            blob.upload_from_filename(file_path)
+
+            load_job = self.client.load_table_from_uri('gs://%s/%s' % (storage_bucket.name, blob.name),
+                                                       self.reference,
+                                                       job_config=job_config)
+
+            result = load_job.result()
+
+            if result.errors and len(result.errors) > 0:
+                raise RuntimeError('Failed to load data into table. Errors:\n%s' % json.dumps(result.errors, indent=4))
+
+            # Perform cleanup.
+            try:
+                blob.delete()
+            except Forbidden:  # pragma: no cover
+                warnings.warn('Failed to delete uploaded blob %s' % blob.path)
 
     def _init_properties(self):
         # Populate table if was initialized with get() yet.
