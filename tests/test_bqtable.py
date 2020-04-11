@@ -7,6 +7,7 @@ from datetime import datetime, date
 
 from google.api_core.exceptions import NotFound
 from google.cloud.bigquery import SchemaField, Table
+from google.cloud.exceptions import Forbidden
 
 try:
     import mock
@@ -175,7 +176,7 @@ class BQTableTest(unittest.TestCase):
             mock_delete_table.assert_not_called()
 
     @pytest.mark.skipif('GOOGLE_APPLICATION_CREDENTIALS' not in os.environ, reason='Undefined Google credentials')
-    def test_table_creation(self):
+    def test_table_creation_remote(self):
         t = BQTable.from_string('bqtoolkit.test.table_name')
 
         t.delete(prompt=False, not_found_ok=True)
@@ -314,6 +315,15 @@ class BQTableTest(unittest.TestCase):
 
             self.assertRaises(RuntimeError, t.load, 'a_file.csv', storage_bucket='my_bucket')
 
+            with mock.patch('warnings.warn') as mock_warn, \
+                    mock.patch('bqtoolkit.table.BQTable._get_storage_bucket') as mock__get_storage_bucket:
+                mock_load_job.return_value.errors = None
+
+                mock__get_storage_bucket.return_value.blob.return_value.delete.side_effect = Forbidden('')
+
+                t.load('a_file.csv', storage_bucket='my_bucket')
+                mock_warn.assert_called()
+
     @pytest.mark.skipif('GOOGLE_APPLICATION_CREDENTIALS' not in os.environ, reason='Undefined Google credentials')
     def test_load(self):
         t = BQTable.from_string('bqtoolkit.tmp.%s' % datetime.now().strftime('%M%S%f'))
@@ -343,3 +353,107 @@ class BQTableTest(unittest.TestCase):
             self.assertEqual(t.num_rows, 2)
 
         t.delete(prompt=False)
+
+    @mock.patch('warnings.warn')
+    @mock.patch('bqtoolkit.table.BQTable._get_storage_bucket')
+    @mock.patch('bqtoolkit.table.BQTable.get')
+    @mock.patch('google.cloud.bigquery.Client')
+    def test_download_strategies(self, mock_bigquery_client, mock_get, mock__get_storage_bucket, mock_warn):
+        mock_extract_table = mock_bigquery_client.return_value.extract_table
+        mock_list_rows = mock_bigquery_client.return_value.list_rows
+
+        mock_list_rows.return_value = [{'field_1': 'a'}, {'field_1': 'b'}]
+
+        mock_download_to_file = mock.Mock()
+        mock_download_to_file.side_effect = lambda x: x.write(b'file_content')
+
+        mock_blob = mock.Mock(download_to_file=mock_download_to_file,
+                              delete=mock.Mock(side_effect=Forbidden('')))
+
+        type(mock_blob).name = mock.PropertyMock(return_value='blob_1')
+
+        mock__get_storage_bucket.return_value.list_blobs.return_value = [
+            mock_blob, mock_blob
+        ]
+
+        with mock.patch('bqtoolkit.table.BQTable.num_bytes', new_callable=mock.PropertyMock) as mock_num_bytes:
+            # File smaller than 1 GB.
+            mock_num_bytes.return_value = 2 ** 30 - 1
+            # No errors returned.
+            type(mock_extract_table.return_value).errors = mock.PropertyMock(return_value=None)
+
+            t = BQTable('p', 'd', 'table')
+
+            for file in t.download(storage_bucket='bucket_name'):
+                with open(file) as f:
+                    self.assertEqual(f.read(), 'file_content')
+
+            mock_extract_table.assert_called_once()
+            self.assertEqual(len(mock_download_to_file.call_args), 2)
+
+            extraction_path = mock_extract_table.call_args[0][1]
+            self.assertFalse('*' in extraction_path, 'Table size was smaller than 1 GB, no wildcard should be used')
+
+            mock_warn.assert_called()
+
+            # Just shy of 10 MB.
+            mock_num_bytes.return_value = 10 * (2 ** 20) - 1
+
+            t.schema = [SchemaField(name='field_1', field_type='STRING')]
+
+            for file in t.download():
+                with open(file) as f:
+                    self.assertEqual("\n".join(f.read().splitlines()), 'field_1\na\nb')
+
+            mock_list_rows.assert_called()
+
+            t.schema = [SchemaField(name='field_1', field_type='RECORD')]
+
+            mock_list_rows.reset_mock()
+
+            for file in t.download():
+                self.assertTrue(os.path.exists(file))
+
+            # RECORD type should not be supported by CSV extraction with list_rows
+            mock_list_rows.assert_not_called()
+
+            mock_num_bytes.return_value = 2 ** 30  # 1 GB.
+            mock_extract_table.reset_mock()
+
+            for file in t.download():
+                self.assertTrue(os.path.exists(file))
+
+            extraction_path = mock_extract_table.call_args[0][1]
+            self.assertTrue('*' in extraction_path, 'Table size was bigger than 1 GB, wildcard should be used')
+
+            type(mock_extract_table.return_value).errors = mock.PropertyMock(return_value=[{'error': 'an error'}])
+
+            try:
+                for file in t.download(storage_bucket='bucket_name'):
+                    self.fail('Expected RuntimeError to be raised')
+            except RuntimeError:
+                pass
+
+    @pytest.mark.skipif('GOOGLE_APPLICATION_CREDENTIALS' not in os.environ, reason='Undefined Google credentials')
+    def test_download(self):
+        with mock.patch('bqtoolkit.table.BQTable.num_bytes', new_callable=mock.PropertyMock) as mock_num_bytes:
+            mock_num_bytes.return_value = 100
+
+            t = BQTable.from_string('bqtoolkit:test.download_types')
+            t.get()
+
+            file_1 = ''
+
+            for file in t.download():
+                with open(file) as f:
+                    file_1 = f.read()
+
+            mock_num_bytes.return_value = 2 ** 20 * 10 + 1
+
+            file_2 = ''
+
+            for file in t.download(storage_bucket='bqtoolkit-test'):
+                with open(file) as f:
+                    file_2 = f.read()
+
+            self.assertEqual(file_1, file_2)

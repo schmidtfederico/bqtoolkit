@@ -7,7 +7,8 @@ with open('README.md', 'r') as f:
 
 dependencies = [
     'google-cloud-bigquery >= 1.24.0, < 2.0.0',
-    'google-cloud-storage >= 1.26.0, < 2.0.0'
+    'google-cloud-storage >= 1.26.0, < 2.0.0',
+    "backports.tempfile;python_version<'3.4'"
 ]
 
 setup(
