@@ -394,8 +394,8 @@ class BQTable(Table):
 
         Args:
             storage_bucket (str):
-                (Optional) The GCS bucket to use to extract the table if it exceeds 10 MB in size or the destination format is
-                not CSV. If not provided and the table is larger than 10 MB, a ValueError will be raised.
+                (Optional) The GCS bucket to use to extract the table if it exceeds 10 MB in size or the destination
+                format is not CSV. If not provided and the table is larger than 10 MB, a ValueError will be raised.
 
             storage_project (str):
                 The GCS project to use to export the table if it exceeds 10 MB in size or if the destination format

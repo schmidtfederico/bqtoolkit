@@ -9,8 +9,8 @@ _PARTITION_PATH_REGEX = re.compile(
     _TABLE_PATH_REGEX.pattern + r'\$(?P<partition_id>[\w]+)'
 )
 
-class BQPartition(object):
 
+class BQPartition(object):
 
     def __init__(self, table, partition_id):
         self._table = table
