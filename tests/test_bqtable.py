@@ -4,6 +4,7 @@ import os
 import sys
 import gzip
 
+from collections import OrderedDict
 from datetime import datetime, date
 
 from google.api_core.exceptions import NotFound
@@ -447,7 +448,10 @@ class BQTableTest(unittest.TestCase):
         # Mock the rows returned by list_rows method.
         mock_list_rows = mock_bigquery_client.return_value.list_rows
 
-        mock_list_rows.return_value = [{'field_1': 'a', 'field_2': 5}, {'field_1': 'b', 'field_2': 10}]
+        mock_list_rows.return_value = [
+            OrderedDict([('field_1', 'a'), ('field_2', 5)]),
+            OrderedDict([('field_1', 'b'), ('field_2', 10)])
+        ]
 
         with mock.patch('bqtoolkit.table.BQTable.num_bytes', new_callable=mock.PropertyMock) as mock_num_bytes:
             # File smaller than 10 MB.
@@ -462,12 +466,12 @@ class BQTableTest(unittest.TestCase):
             # Changing delimiter and header should be supported by fast-track.
             for file in t.download(field_delimiter='\t', print_header=False):
                 with open(file) as f:
-                    self.assertEqual(f.read(), 'a\t5\nb\t10\n')
+                    self.assertEqual(f.read().replace('\r', ''), 'a\t5\nb\t10\n')
 
             # Exporting as GZIP should be supported when fast-tracking too.
             for file in t.download(compression=Compression.GZIP):
                 with gzip.open(file, 'rt') as f:
-                    self.assertEqual(f.read(), 'field_1,field_2\na,5\nb,10\n')
+                    self.assertEqual(f.read().replace('\r', ''), 'field_1,field_2\na,5\nb,10\n')
 
             try:
                 for file in t.download(use_avro_logical_types=True):

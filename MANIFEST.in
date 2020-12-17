@@ -3,3 +3,8 @@ include *.md
 include LICENSE.txt
 include .coveragerc
 recursive-include data *
+
+exclude tests
+exclude tests/data
+recursive-exclude tests *.csv
+recursive-exclude tests *.py
