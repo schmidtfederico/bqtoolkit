@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover
 
 from google.api_core.exceptions import NotFound
 from google.cloud import bigquery, storage
-from google.cloud.bigquery import Table, LoadJobConfig, ExtractJobConfig
+from google.cloud.bigquery import Table, LoadJobConfig, ExtractJobConfig, Compression
 from google.cloud.exceptions import Forbidden
 
 from bqtoolkit._helpers import execute_partitions_query
@@ -212,7 +212,7 @@ class BQTable(Table):
             except Forbidden:
                 warnings.warn('Failed to delete uploaded blob %s' % blob.path)
 
-    def download(self, storage_project=None, storage_bucket=None, destination_format='csv', **kwagrs):
+    def download(self, storage_project=None, storage_bucket=None, destination_format='csv', **kwargs):
         # Make sure properties were populated.
         self._init_properties()
 
@@ -221,24 +221,42 @@ class BQTable(Table):
 
         field_types = [field.field_type for field in self.schema]
 
-        all_csv_supported = all([t in _csv_export_formatters for t in field_types])
+        extract_job_config = ExtractJobConfig(destination_format=destination_format, **kwargs)
 
-        if destination_format == 'csv' and table_size_mb <= 10 and all_csv_supported:
+        # Decide if we can fast-track the CSV export for small (< 10 MB) tables.
+        csv_fields_supported = all([t in _csv_export_formatters for t in field_types])
+        export_params_supported = all(k in ['field_delimiter', 'compression', 'print_header'] for k in kwargs.keys())
+        compression_supported = kwargs.get('compression', Compression.NONE) in [Compression.NONE, Compression.GZIP]
+
+        can_fast_track_csv_export = destination_format == 'csv' and table_size_mb <= 10 and csv_fields_supported and \
+            export_params_supported and compression_supported
+
+        if can_fast_track_csv_export:
+            import csv
             # Export by listing rows instead of requiring Google Cloud Storage.
             with TemporaryDirectory() as tmp_directory:
-                tmp_file = os.path.join(tmp_directory, job_id + '.csv')
+                gzip_compression = 'compression' in kwargs and kwargs['compression'] == Compression.GZIP
 
-                with open(tmp_file, 'w') as out:
-                    import csv
+                tmp_file = os.path.join(tmp_directory, job_id + '.csv' + ('.gz' if gzip_compression else ''))
 
-                    writer = csv.writer(out)
-                    writer.writerow([field.name for field in self.schema])
+                if gzip_compression:
+                    import gzip
+                    out_f = gzip.open(tmp_file, 'wt')
+                else:
+                    out_f = open(tmp_file, 'w')
+
+                try:
+                    writer = csv.writer(out_f, delimiter=kwargs.get('field_delimiter', ','))
+                    if kwargs.get('print_header', True) in [True, 'true']:
+                        writer.writerow([field.name for field in self.schema])
 
                     for row in self.client.list_rows(self, selected_fields=self.schema):
                         writer.writerow([
                             _csv_export_formatters[field_types[i]](value)
                             for i, value in enumerate(row.values())
                         ])
+                finally:
+                    out_f.close()
 
                 yield tmp_file
         else:
@@ -252,8 +270,6 @@ class BQTable(Table):
                 wildcard='_*' if table_size_mb >= 1024 else '',
                 format=destination_format
             )
-
-            extract_job_config = ExtractJobConfig(destination_format=destination_format, **kwagrs)
 
             extract_job = self.client.extract_table(self, destination_uri, job_id=job_id, job_config=extract_job_config)
 
