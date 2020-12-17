@@ -2,15 +2,15 @@ import re
 
 from google.cloud.exceptions import Conflict, NotFound
 
-from bqtoolkit.table import BQTable
+from bqtoolkit.table import BQTable, _TABLE_PATH_REGEX
 import bqtoolkit._helpers
+
+_PARTITION_PATH_REGEX = re.compile(
+    _TABLE_PATH_REGEX.pattern + r'\$(?P<partition_id>[\w]+)'
+)
 
 
 class BQPartition(object):
-
-    PARTITION_PATH_REGEX = re.compile(
-        BQTable.TABLE_PATH_REGEX.pattern + r'\$(?P<partition_id>[\w]+)'
-    )
 
     def __init__(self, table, partition_id):
         self._table = table
@@ -26,10 +26,10 @@ class BQPartition(object):
         :param str partition_path: A string with the full path to this partition
                                   (e.g. project-id:dataset_id.table_name$20190101).
         :param kwargs: Other keyword arguments passed to :class:`~bqtoolkit.table.BQTable` init method.
-        :rtype :class:`~bqtoolkit.table.BQPartition`
         :return: A BQPartition, initialized from the full table path.
+        :rtype: :class:`~bqtoolkit.table.BQPartition`
         """
-        m = BQPartition.PARTITION_PATH_REGEX.match(partition_path)
+        m = _PARTITION_PATH_REGEX.match(partition_path)
 
         if m is None:
             raise ValueError('Failed to parse "%s" as partition path.' % partition_path)

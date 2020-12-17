@@ -2,11 +2,13 @@ import pickle
 import unittest
 import os
 import sys
+import gzip
 
+from collections import OrderedDict
 from datetime import datetime, date
 
 from google.api_core.exceptions import NotFound
-from google.cloud.bigquery import SchemaField, Table
+from google.cloud.bigquery import SchemaField, Table, Compression
 from google.cloud.exceptions import Forbidden
 
 try:
@@ -431,6 +433,49 @@ class BQTableTest(unittest.TestCase):
             try:
                 for file in t.download(storage_bucket='bucket_name'):
                     self.fail('Expected RuntimeError to be raised')
+            except RuntimeError:
+                pass
+
+    @mock.patch('warnings.warn')
+    @mock.patch('bqtoolkit.table.BQTable._get_storage_bucket')
+    @mock.patch('bqtoolkit.table.BQTable.get')
+    @mock.patch('google.cloud.bigquery.Client')
+    def test_fast_tracking_download_does_not_ignore_additional_params(self, mock_bigquery_client, mock_get,
+                                                                      mock__get_storage_bucket, mock_warn):
+        # Force _get_storage_bucket to raise an error to faster test non-fast tracking approaches.
+        mock__get_storage_bucket.side_effect = RuntimeError
+
+        # Mock the rows returned by list_rows method.
+        mock_list_rows = mock_bigquery_client.return_value.list_rows
+
+        mock_list_rows.return_value = [
+            OrderedDict([('field_1', 'a'), ('field_2', 5)]),
+            OrderedDict([('field_1', 'b'), ('field_2', 10)])
+        ]
+
+        with mock.patch('bqtoolkit.table.BQTable.num_bytes', new_callable=mock.PropertyMock) as mock_num_bytes:
+            # File smaller than 10 MB.
+            mock_num_bytes.return_value = 10 * (2 ** 20) - 1
+
+            t = BQTable('p', 'd', 'table')
+            t.schema = [
+                SchemaField(name='field_1', field_type='STRING'),
+                SchemaField(name='field_2', field_type='INTEGER')
+            ]
+
+            # Changing delimiter and header should be supported by fast-track.
+            for file in t.download(field_delimiter='\t', print_header=False):
+                with open(file) as f:
+                    self.assertEqual(f.read().replace('\r', ''), 'a\t5\nb\t10\n')
+
+            # Exporting as GZIP should be supported when fast-tracking too.
+            for file in t.download(compression=Compression.GZIP):
+                with gzip.open(file, 'rt') as f:
+                    self.assertEqual(f.read().replace('\r', ''), 'field_1,field_2\na,5\nb,10\n')
+
+            try:
+                for file in t.download(use_avro_logical_types=True):
+                    self.fail('Additional parameters of ExportJobConfig should stop us form fast-tracking CSV export')
             except RuntimeError:
                 pass
 

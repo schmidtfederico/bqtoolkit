@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover
 
 from google.api_core.exceptions import NotFound
 from google.cloud import bigquery, storage
-from google.cloud.bigquery import Table, LoadJobConfig, ExtractJobConfig
+from google.cloud.bigquery import Table, LoadJobConfig, ExtractJobConfig, Compression
 from google.cloud.exceptions import Forbidden
 
 from bqtoolkit._helpers import execute_partitions_query
@@ -40,10 +40,34 @@ _csv_export_formatters = {
     'DATETIME': _identity
 }
 
+_TABLE_PATH_REGEX = re.compile(r'(?P<project>[\w-]+)[:.](?P<dataset>\w+)\.(?P<name>\w+)')
+
 
 class BQTable(Table):
+    """A BigQuery table.
 
-    TABLE_PATH_REGEX = re.compile(r'(?P<project>[\w-]+)[:.](?P<dataset>\w+)\.(?P<name>\w+)')
+    Combines Google's BigQuery package Client, TableReference and Table classes in one easier to use class.
+
+    Args:
+        project (str):
+            The Project ID of the table.
+        dataset (str):
+            The Dataset ID of the table.
+        name (str):
+            Table ID.
+        schema:
+            (Optional) The table Schema, if the intention is to create this table in the ~server.
+            Otherwise schema will be populated when :meth:`~bqtoolkit.table.BQTable.get` is called.
+        client:
+            (Optional) The BigQuery :class:`google.cloud.bigquery.client.Client` to use when performing actions
+            with this table. If not defined, a client using this table's project will be used.
+
+    Basic Usage:
+      >>> from bqtoolkit.table import BQTable
+      >>> t = BQTable('project', 'dataset', 'table_name')
+      >>> t.get()  # Populate this table's properties.
+      >>> len(t.schema) # All properties are now populated.
+    """
 
     def __init__(self, project, dataset, name, schema=None, client=None):
         self.dataset = dataset
@@ -56,9 +80,9 @@ class BQTable(Table):
 
     @property
     def client(self):
-        """
-        :rtype :class:`~google.cloud.bigquery.Client`
-        :return A BigQuery client for this table's project.
+        """google.cloud.bigquery.client.Client:The BigQuery client used when performing requests from this table.
+
+        If not configured by the user on init, a client with this table's `project` is used.
         """
         if self._bq_client is None:
             if self.project not in _bq_clients:
@@ -71,12 +95,18 @@ class BQTable(Table):
         """
         Creates an instance of this class from a full table identifier.
 
-        :param str table_path: A string with the full path to this table (e.g. project-id:dataset_id.table_name).
-        :param kwargs: Other keyword arguments passed to :class:`~bqtoolkit.table.BQTable` init method.
-        :rtype :class:`~bqtoolkit.table.BQTable`
-        :return: A BQTable, initialized from the full table path.
+        Args:
+            table_path (str):
+                A string with the full path to this table (e.g. project-id:dataset_id.table_name).
+
+            kwargs (dict):
+                (Optional) Other keyword arguments passed to :class:`~bqtoolkit.table.BQTable` init method.
+
+        Returns:
+            :class:`~bqtoolkit.table.BQTable`: A BQTable, initialized from the full table path.
+
         """
-        m = BQTable.TABLE_PATH_REGEX.match(table_path)
+        m = _TABLE_PATH_REGEX.match(table_path)
 
         if m is None:
             raise ValueError('Failed to parse "%s" as table path.' % table_path)
@@ -87,10 +117,20 @@ class BQTable(Table):
 
     def get_full_table_id(self, standard=False, quoted=False):
         """
-        :param bool standard: Use Standard SQL delimited for project name (.). If false, a colon is used.
-        :param bool quoted: Quote table path? If true, name is wrapped with apostrophes (standard) or brackets (legacy).
-        :return: This table's full
-        :rtype str
+        Returns a full identifier for this table.
+
+        Args:
+            standard (bool):
+                (Optional)
+                If :data:`False`, use a colon to separate project from dataset 8default).
+                If :data:`True`, a dot is used (like in Standard SQL).
+
+            quoted (bool):
+                (Optional)
+                Quote table path? If :data:`True`, name is wrapped with apostrophes (standard) or brackets (legacy).
+
+        Returns:
+            str: This table's full id.
         """
         name_str = '{project}.{dataset}.{table}' if standard else '{project}:{dataset}.{table}'
 
@@ -102,13 +142,50 @@ class BQTable(Table):
 
     @property
     def full_table_id(self):
+        """str:ID for the table.
+
+        In the format ``project_id:dataset_id.table_id``.
+
+        Equal to the call `table.get_full_table_id(standard=False, quoted=False)`.
+
+        .. note::
+            Contrary to Google's Table, this property is available even when the server hasn't yet been called.
+        """
         return self.get_full_table_id()
 
     def get(self, overwrite_changes=True, **kwargs):
+        """Populates this table's properties from the server.
+
+        If properties were already populated, ``overwrite_changes`` controls if any potential changes that
+        user made to this table's properties get overwritten (only relevant when performing an update operation
+        afterwards).
+
+        Args:
+            overwrite_changes (bool):
+                (Optional) Overwrite user-made changes in this table's properties. Defaults to :data:`True`.
+
+        Returns:
+            :class:`~bqtoolkit.table.BQTable`:
+                A reference to this same object, so that it's safe to do: `t = t.get()`
+
+        Raises:
+            google.api_core.exceptions.NotFound: if this table doesn't exist.
+        """
         self._update_properties(self.client.get_table(self, **kwargs), force_update=overwrite_changes)
         return self
 
     def exists(self):
+        """Checks if table exists in the server.
+
+        .. note::
+            This method also populates this table's properties (like :meth:`~bqtoolkit.table.BQTable.get` does),
+            but only if the table exists in the server and :meth:`~bqtoolkit.table.BQTable.get` wasn't called before.
+
+        Returns:
+            bool:
+                :data:`True` if table exists in BigQuery server, :data:`False` otherwise.
+
+        """
         try:
             self.get(overwrite_changes=False)
             return True
@@ -116,6 +193,19 @@ class BQTable(Table):
             return False
 
     def delete(self, prompt=True, **kwargs):
+        """Deletes table from the server.
+
+        Args:
+            prompt (bool):
+                (Optional) Prompt for confirmation before deleting table. Defaults to :data:`True`.
+
+            kwargs (dict):
+                (Optional) Other parameters passed to method :meth:`~google.cloud.bigquery.client.Client.delete_table`
+                from BigQuery's :class:`~google.cloud.bigquery.client.Client`.
+
+        Returns:
+            bool: :data:`True` if table was deleted, :data:`False` otherwise.
+        """
         if prompt:
             sys.stdout.write('Delete table %s? [y/N]' % self.full_table_id)
             sys.stdout.flush()
@@ -128,16 +218,73 @@ class BQTable(Table):
         return True
 
     def create(self, **kwargs):
+        """Creates table in BigQuery.
+
+        Args:
+            kwargs (dict):
+                (Optional) Other parameters passed to method :meth:`~google.cloud.bigquery.client.Client.create_table`
+                from BigQuery's :class:`~google.cloud.bigquery.client.Client`.
+
+        Returns:
+            :class:`~bqtoolkit.table.BQTable`:
+                A reference to this same object, so that it's safe to do: `t = t.create()`
+
+        Example:
+
+          >>> from google.cloud.bigquery.schema import SchemaField
+          >>> t = BQTable('project', 'dataset', 'table_name')
+          >>> t.schema = [SchemaField('my_string', 'STRING')]
+          >>> t.create()
+        """
         self._update_properties(self.client.create_table(self, **kwargs))
         return self
 
     def update(self, fields=None, **kwargs):
+        """
+        Updates this table fields in BigQuery.
+
+        If fields are not specified, a diff is calculated based on which properties were modified by the user after
+        after doing the last :meth:`~bqtoolkit.table.BQTable.get()` call.
+
+        Args:
+            fields (list[str]):
+                (Optional) The list of properties to update. If not provided, calculated based on what changed since
+                table's properties were last updated (see :meth:`~bqtoolkit.table.BQTable.get()` and
+                :meth:`~bqtoolkit.table.BQTable.exists()`).
+
+            kwargs (dict):
+                (Optional) Other parameters passed to method :meth:`~google.cloud.bigquery.client.Client.update_table`
+                from BigQuery's :class:`~google.cloud.bigquery.client.Client`.
+
+        Returns:
+            :class:`~bqtoolkit.table.BQTable`:
+                A reference to this same object, so that it's safe to do: t = t.update()
+
+        Example:
+
+          >>> from google.cloud.bigquery.schema import SchemaField
+          >>> t = BQTable('project', 'dataset', 'table_name')
+          >>> t.get()
+          >>> t.description = 'A new description for this table'
+          >>> t.schema += [SchemaField('a_new_field', 'FLOAT')]
+          >>> t.update()
+          >>> # Same as doing t.update(fields=['description', 'schema'])
+        """
         if fields is None:
             fields = self._properties_diff()
         self._update_properties(self.client.update_table(self, fields=fields, **kwargs))
         return self
 
     def get_partitions(self):
+        """
+        Lists all partitions in this table.
+
+        Each partition has its id, creation timestamp and last modified timestamp.
+        See :class:`~bqtoolkit.partition.BQPartition`.
+
+        Returns:
+            list[:class:`~bqtoolkit.partition.BQPartition`]
+        """
         self._init_properties()
 
         from bqtoolkit.partition import BQPartition
@@ -150,23 +297,43 @@ class BQTable(Table):
 
         return None
 
-    def load(self, file_path, storage_project=None, storage_bucket=None, write_disposition='WRITE_APPEND',
+    def load(self, file_path, storage_bucket=None, storage_project=None, write_disposition='WRITE_APPEND',
              autodetect=True, **kwargs):
         """
         Loads into this table the content of the given file path. Automatically handles large files uploads (> 10 MB)
         using Google Cloud Storage, if a storage_bucket is provided.
 
-        :param str file_path: Path to the file.
-        :param str storage_project: The GCS project to use to upload the file if it exceeds 10 MB in size.
-                                    Defaults to the table's project.
-        :param str storage_bucket: The GCS bucket to use to upload the file if it exceeds 10 MB in size.
-                                   If not provided and file is larger than 10 MB, a ValueError will be raised.
-        :param bool autodetect: Whether to let BigQuery automatically detect the schema of the file, defaults to True.
-                                 See :class:`~google.cloud.bigquery.LoadJobConfig` for more details.
-        :param bool write_disposition: What to do if table already exists. Defaults to append to it.
-                                  See :class:`~google.cloud.bigquery.LoadJobConfig` for more details.
-        :param kwargs: Other parameters passed to :class:`~google.cloud.bigquery.LoadJobConfig` constructor.
-        :return:
+        Files uploaded to Google Cloud Storage will be deleted as soon as the load job finishes (even if it fails).
+        If credentials lack permission to perform the delete a warning will be raised.
+
+        Args:
+            file_path (str):
+                Path to the file.
+
+            storage_bucket (str):
+                (Optional) The GCS bucket to use to upload the file if it exceeds 10 MB in size.
+                If not provided and file is larger than 10 MB, a ValueError will be raised.
+
+            storage_project (str):
+                (Optional) (Optional) The GCS project to use to upload the file if it exceeds 10 MB in size.
+                Defaults to the table's project.
+
+            autodetect (bool):
+                (Optional) Whether to let BigQuery automatically detect the schema of the file, defaults to True.
+                See :class:`~google.cloud.bigquery.LoadJobConfig` for more details.
+
+            write_disposition (bool):
+                (Optional) What to do if table already exists. Defaults to append to it.
+                See :class:`~google.cloud.bigquery.LoadJobConfig` for more details.
+
+            kwargs (dict):
+                (Optional) Other parameters passed to :class:`~google.cloud.bigquery.LoadJobConfig` constructor.
+
+        Raises:
+            ValueError:
+                If the file to load is bigger than 10 MB and no ``storage_bucket`` was passed.
+            RuntimeError:
+                If the load to BigQuery failed.
         """
         # Create a load job configuration.
         job_config = LoadJobConfig(**kwargs)
@@ -203,16 +370,64 @@ class BQTable(Table):
 
             result = load_job.result()
 
-            if result.errors and len(result.errors) > 0:
-                raise RuntimeError('Failed to load data into table. Errors:\n%s' % json.dumps(result.errors, indent=4))
-
             # Perform cleanup.
             try:
                 blob.delete()
             except Forbidden:
                 warnings.warn('Failed to delete uploaded blob %s' % blob.path)
 
-    def download(self, storage_project=None, storage_bucket=None, destination_format='csv', **kwagrs):
+            if result.errors and len(result.errors) > 0:
+                raise RuntimeError('Failed to load data into table. Errors:\n%s' % json.dumps(result.errors, indent=4))
+
+    def download(self, storage_bucket=None, storage_project=None, destination_format='csv', **kwargs):
+        """Downloads a table's content to one or more *temporary* files for processing.
+
+        Automatically handles downloading large tables (> 10 MB) via Google Cloud Storage and deletes temporary GCS
+        files once user is done processing. If credentials lack delete permissions in ``storage_bucket`` a warning
+        will be raised.
+
+        Yields the path of each file for processing and deletes each file as the user is done processing
+        (if the used didn't delete or move the file).
+
+        .. note::
+            Use :func:`shutil.move` to move the yielded file if you intend to keep the exported file.
+
+        Args:
+            storage_bucket (str):
+                (Optional) The GCS bucket to use to extract the table if it exceeds 10 MB in size or the destination
+                format is not CSV. If not provided and the table is larger than 10 MB, a ValueError will be raised.
+
+            storage_project (str):
+                The GCS project to use to export the table if it exceeds 10 MB in size or if the destination format
+                is not CSV. Defaults to the table's project.
+
+            destination_format (str):
+                (Optional) Format in which to export the table, defaults to ``csv``.
+                Other valid values are ``json`` and ``avro``. See :class:`~google.cloud.bigquery.ExtractJobConfig`.
+
+            kwargs (dict):
+                (Optional) Other parameters passed to :class:`~google.cloud.bigquery.ExtractJobConfig` constructor.
+
+        Yields:
+            str:
+                Path to a *temporary* file where rows from this table were exported.
+                File is automatically deleted after processing.
+
+        Raises:
+            ValueError:
+                if the table to download is bigger than 10 MB or format is not CSV and no ``storage_bucket`` was passed.
+            RuntimeError:
+                if the extraction job from BigQuery failed.
+
+        Example:
+
+          >>> from bqtoolkit import BQTable
+          >>> t = BQTable('project', 'dataset', 'table_name')
+          >>> for file_path in t.download():
+          >>>     with open(file_path) as f:
+          >>>         f.read()
+          >>>     # File will be deleted after iterating.
+        """
         # Make sure properties were populated.
         self._init_properties()
 
@@ -221,24 +436,42 @@ class BQTable(Table):
 
         field_types = [field.field_type for field in self.schema]
 
-        all_csv_supported = all([t in _csv_export_formatters for t in field_types])
+        extract_job_config = ExtractJobConfig(destination_format=destination_format, **kwargs)
 
-        if destination_format == 'csv' and table_size_mb <= 10 and all_csv_supported:
+        # Decide if we can fast-track the CSV export for small (< 10 MB) tables.
+        csv_fields_supported = all([t in _csv_export_formatters for t in field_types])
+        export_params_supported = all(k in ['field_delimiter', 'compression', 'print_header'] for k in kwargs.keys())
+        compression_supported = kwargs.get('compression', Compression.NONE) in [Compression.NONE, Compression.GZIP]
+
+        can_fast_track_csv_export = destination_format == 'csv' and table_size_mb <= 10 and csv_fields_supported and \
+            export_params_supported and compression_supported
+
+        if can_fast_track_csv_export:
+            import csv
             # Export by listing rows instead of requiring Google Cloud Storage.
             with TemporaryDirectory() as tmp_directory:
-                tmp_file = os.path.join(tmp_directory, job_id + '.csv')
+                gzip_compression = 'compression' in kwargs and kwargs['compression'] == Compression.GZIP
 
-                with open(tmp_file, 'w') as out:
-                    import csv
+                tmp_file = os.path.join(tmp_directory, job_id + '.csv' + ('.gz' if gzip_compression else ''))
 
-                    writer = csv.writer(out)
-                    writer.writerow([field.name for field in self.schema])
+                if gzip_compression:
+                    import gzip
+                    out_f = gzip.open(tmp_file, 'wt')
+                else:
+                    out_f = open(tmp_file, 'w')
+
+                try:
+                    writer = csv.writer(out_f, delimiter=kwargs.get('field_delimiter', ','))
+                    if kwargs.get('print_header', True) in [True, 'true']:
+                        writer.writerow([field.name for field in self.schema])
 
                     for row in self.client.list_rows(self, selected_fields=self.schema):
                         writer.writerow([
                             _csv_export_formatters[field_types[i]](value)
                             for i, value in enumerate(row.values())
                         ])
+                finally:
+                    out_f.close()
 
                 yield tmp_file
         else:
@@ -252,8 +485,6 @@ class BQTable(Table):
                 wildcard='_*' if table_size_mb >= 1024 else '',
                 format=destination_format
             )
-
-            extract_job_config = ExtractJobConfig(destination_format=destination_format, **kwagrs)
 
             extract_job = self.client.extract_table(self, destination_uri, job_id=job_id, job_config=extract_job_config)
 
@@ -272,18 +503,28 @@ class BQTable(Table):
                     with open(file_path, 'wb') as out_f:
                         blob.download_to_file(out_f)
 
-                    # Yield path of downloaded blob for processing.
-                    yield file_path
-
-                    if os.path.exists(file_path):
-                        os.remove(file_path)  # Remove file once processed.
-
                     try:
-                        blob.delete()
-                    except Forbidden:
-                        warnings.warn('Failed to delete extracted blob %s' % blob.path)
+                        # Yield path of downloaded blob for processing.
+                        yield file_path
+                    finally:
+                        # Perform local and remote cleanup.
+
+                        # Although files will be deleted by TemporaryDirectory when the with block exits,
+                        # in case we're dealing with large files, we want to make space in the working directory
+                        # for the next blob.
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+
+                        try:
+                            # Don't leave blobs in GCS as these incur in charges.
+                            blob.delete()
+                        except Forbidden:
+                            warnings.warn('Failed to delete extracted blob %s' % blob.path)
 
     def _init_properties(self):
+        """
+        Call this internal method when you need your method to work with an initialized BQTable.
+        """
         # Populate table if was initialized with get() yet.
         if self.etag is None:
             self.get(overwrite_changes=False)
@@ -312,8 +553,8 @@ class BQTable(Table):
 
         if storage_bucket is None:
             raise ValueError(
-                "A Google Cloud Storage bucket name should be provided in order to load results to "
-                "table %s" % self.full_table_id
+                "A Google Cloud Storage bucket name should be provided in order to perform load or download operations"
+                "with table %s" % self.full_table_id
             )
 
         return storage_client.bucket(storage_bucket)
@@ -329,10 +570,8 @@ class BQTable(Table):
         # Remove the inner _bq_client when serializing an instance.
         state = self.__dict__.copy()
         del state["_bq_client"]
-        del state["_get_properties"]
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
         self._bq_client = None
-        self._get_properties = {}
