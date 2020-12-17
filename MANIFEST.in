@@ -2,6 +2,7 @@ include pyproject.toml
 include *.md
 include LICENSE.txt
 include .coveragerc
+include setup.py
 recursive-include data *
 
 exclude tests
