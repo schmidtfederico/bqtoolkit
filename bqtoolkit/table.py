@@ -536,7 +536,7 @@ class BQTable(Table):
     def _update_properties(self, api_table, force_update=True):
         if force_update or self.etag is None:
             self._properties = copy.deepcopy(api_table._properties)
-            self._get_properties = copy.copy(self._properties)
+            self._get_properties = copy.deepcopy(self._properties)
 
     def _properties_diff(self):
         changed_properties = []
