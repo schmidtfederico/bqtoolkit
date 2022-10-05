@@ -10,14 +10,14 @@ install:
   - pip install tox-travis
   - if [ "$TRAVIS_PYTHON_VERSION" = "3.8" ]; then echo "$GKEY" > pytest@bqtoolkit.json; fi
   - if [ "$TRAVIS_PYTHON_VERSION" = "3.8" ]; then export GOOGLE_APPLICATION_CREDENTIALS=pytest@bqtoolkit.json; fi
-  #- if [ "$TRAVIS_PYTHON_VERSION" = "3.7" ]; then pip install coveralls -e .; fi
+  - if [ "$TRAVIS_PYTHON_VERSION" = "3.8" ]; then pip install coveralls -e .; fi
 
 script:
   - tox
   - if [ "$TRAVIS_PYTHON_VERSION" = "3.8" ]; then coverage run -m pytest tests; fi
 
-#after_success:
-#  - if [ "$TRAVIS_PYTHON_VERSION" = "3.7" ]; then coveralls; fi
+after_success:
+  - if [ "$TRAVIS_PYTHON_VERSION" = "3.7" ]; then coveralls; fi
 
 notifications:
   email: false
