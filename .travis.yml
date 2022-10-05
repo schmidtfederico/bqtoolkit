@@ -13,7 +13,7 @@ install:
   - if [ "$TRAVIS_PYTHON_VERSION" = "3.8" ]; then pip install coveralls -e .; fi
 
 script:
-  - tox
+  - tox -v
   - if [ "$TRAVIS_PYTHON_VERSION" = "3.8" ]; then coverage run -m pytest tests; fi
 
 after_success:
