@@ -4,7 +4,6 @@ import re
 import sys
 import uuid
 import warnings
-from distutils.util import strtobool
 import six.moves
 import copy
 
@@ -19,6 +18,7 @@ from google.cloud.bigquery import Table, LoadJobConfig, ExtractJobConfig, Compre
 from google.cloud.exceptions import Forbidden
 
 from bqtoolkit._helpers import execute_partitions_query
+from bqtoolkit._helpers import strtobool
 
 _bq_clients = {}
 

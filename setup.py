@@ -6,9 +6,8 @@ with open('README.md', 'r') as f:
     long_description = f.read()
 
 dependencies = [
-    'google-cloud-bigquery >= 1.24.0, < 3.0.0',
-    'google-cloud-storage >= 1.26.0, < 3.0.0',
-    'importlib-metadata<5.0'
+    'google-cloud-bigquery >= 3.0.0, < 4.0.0',
+    'google-cloud-storage >= 3.0.0, < 4.0.0'
 ]
 
 setup(
@@ -28,13 +27,15 @@ setup(
         'License :: OSI Approved :: MIT License',
         'Programming Language :: Python',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.6',
-        'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
+        'Programming Language :: Python :: 3.11',
+        'Programming Language :: Python :: 3.12',
+        'Programming Language :: Python :: 3.13',
+        'Programming Language :: Python :: 3.14',
         'Operating System :: OS Independent',
         'Topic :: Internet'
     ],
-    python_requires='>=3.6, <4'
+    python_requires='>=3.8, <4'
 )
